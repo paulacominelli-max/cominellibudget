@@ -2114,6 +2114,54 @@ renderAll();
 // ── Boot ──────────────────────────────────────────────────────────────────────
 loadFromStorage();
 
+// ── DEBUG PANEL ───────────────────────────────────────────────────────────────
+(function() {
+  const panel = document.createElement('div');
+  panel.id = 'debugPanel';
+  panel.style.cssText = `position:fixed;bottom:0;left:0;right:0;background:#1a1a1a;color:#0f0;
+    font:12px monospace;padding:8px 12px;z-index:9999;max-height:120px;overflow-y:auto;
+    border-top:2px solid #0f0;`;
+  document.body.appendChild(panel);
+
+  function updateDebug() {
+    const keys = ['userAddedTxns','budgetOverrides','catRenames','customCats','deletedCats','deletedTxns'];
+    const lines = keys.map(k => {
+      const raw = localStorage.getItem(k);
+      if (!raw) return `${k}: ❌ NOT IN STORAGE`;
+      try {
+        const parsed = JSON.parse(raw);
+        const count = Array.isArray(parsed) ? parsed.length : Object.keys(parsed).length;
+        return `${k}: ✅ ${count} items (${raw.length} bytes)`;
+      } catch(e) { return `${k}: ⚠ PARSE ERROR`; }
+    });
+    panel.innerHTML = '<strong>localStorage DEBUG</strong> — ' + lines.join(' | ');
+  }
+
+  // Patch lsSet to update debug panel after every save
+  const origLsSet = window.lsSet || lsSet;
+  window._lsSetDebug = function(key, val) {
+    origLsSet(key, val);
+    updateDebug();
+  };
+
+  // Override lsSet globally
+  window.lsSet = function(key, val) {
+    try {
+      localStorage.setItem(key, JSON.stringify(val));
+      console.log('[lsSet] Saved', key, '->', JSON.stringify(val).length, 'bytes');
+    } catch(e) {
+      console.error('[lsSet] FAILED to save', key, e);
+      panel.style.background = '#8b0000';
+      panel.innerHTML += ' | ⛔ SAVE FAILED: ' + e.message;
+    }
+    updateDebug();
+  };
+
+  updateDebug();
+  setInterval(updateDebug, 2000);
+})();
+
+
 
 </script>
 </body>
