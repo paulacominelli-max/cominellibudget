@@ -612,97 +612,42 @@ const TXNS = [{"year":"2026","month":"JAN","category":"Groceries/Household","mer
 
 const MONTHS_ORDER = ['JAN','FEB','MARCH','APRIL','MAY','JUNE','JULY','AUG','SEP','OCT','NOV','DEC'];
 const MONTH_LABELS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-// ── Storage Layer ─────────────────────────────────────────────────────────────
-// Detects environment: uses window.storage (Claude artifact) when available,
-// otherwise falls back to Supabase + localStorage (real browser).
-const IS_CLAUDE_ENV = (typeof window !== 'undefined' && typeof window.storage !== 'undefined');
-
-// ── Claude artifact storage (window.storage) ──────────────────────────────────
-async function csGet(key) {
-  try { const r = await window.storage.get(key); return r ? JSON.parse(r.value) : null; } catch(e) { return null; }
+// ── Storage: pure localStorage ────────────────────────────────────────────────
+function lsGet(key, fallback) {
+  try { const v = localStorage.getItem(key); return v !== null ? JSON.parse(v) : fallback; } catch(e) { return fallback; }
 }
-async function csSet(key, val) {
-  try { await window.storage.set(key, JSON.stringify(val)); } catch(e) {}
+function lsSet(key, val) {
+  try { localStorage.setItem(key, JSON.stringify(val)); } catch(e) {}
 }
 
-// ── Supabase Config (browser only) ───────────────────────────────────────────
-const SUPABASE_URL = 'https://sxjhvcmqwbprcuyrhmyo.supabase.co';
-const SUPABASE_KEY = 'sb_publishable_Xlo7MB5DG_kB2TCaoCVm3A_Miawo_cf';
+function loadFromStorage() {
+  // Merge any extra saved transactions on top of baked ones
+  const savedTxns = lsGet('addedTxns', []);
+  const bakedIds  = new Set(addedTxns.map(t => t._id));
+  savedTxns.forEach(t => { if (!bakedIds.has(t._id)) { addedTxns.push(t); bakedIds.add(t._id); } });
 
-async function sbFetch(path, method='GET', body=null) {
-  if (IS_CLAUDE_ENV) return method === 'GET' ? [] : null; // no-op in Claude
-  const headers = {
-    'apikey': SUPABASE_KEY,
-    'Authorization': 'Bearer ' + SUPABASE_KEY,
-    'Content-Type': 'application/json',
-  };
-  if (method === 'POST') headers['Prefer'] = 'return=minimal';
-  const opts = { method, headers };
-  if (body) opts.body = JSON.stringify(body);
-  const r = await fetch(SUPABASE_URL + '/rest/v1/' + path, opts);
-  if (!r.ok) { const t = await r.text(); throw new Error(t); }
-  if (method === 'GET') return r.json();
-  return null;
-}
+  // Budget overrides
+  const savedBudget = lsGet('budgetOverrides', {});
+  Object.assign(BUDGET_OVERRIDES, savedBudget);
 
-// ── Unified load: Claude uses window.storage, browser uses Supabase ───────────
-async function loadFromSupabase() {
-  try {
-    if (IS_CLAUDE_ENV) {
-      // Load all state from window.storage
-      const savedTxns    = await csGet('addedTxns');
-      const savedDelIdxs = await csGet('deletedIdxs');
-      const savedBudget  = await csGet('budgetOverrides');
-      const savedRenames = await csGet('catRenames');
-      const savedCustCats= await csGet('customCats');
-      const savedDelCats = await csGet('deletedCats');
+  // Category renames
+  const savedRenames = lsGet('catRenames', {});
+  Object.assign(CAT_RENAMES, savedRenames);
 
-      if (savedTxns) {
-        const bakedIds = new Set(addedTxns.map(t => t._id));
-        savedTxns.forEach(t => { if (!bakedIds.has(t._id)) { addedTxns.push(t); bakedIds.add(t._id); } });
-      }
-      if (savedDelIdxs) savedDelIdxs.forEach(idx => DELETED_IDXS.add(idx));
-      if (savedBudget)  Object.assign(BUDGET_OVERRIDES, savedBudget);
-      if (savedRenames) Object.assign(CAT_RENAMES, savedRenames);
-      if (savedCustCats) savedCustCats.forEach(n => { if (!CUSTOM_CATS.includes(n)) CUSTOM_CATS.push(n); });
-      if (savedDelCats)  savedDelCats.forEach(n => DELETED_CATS.add(n));
+  // Custom categories
+  const savedCustCats = lsGet('customCats', []);
+  savedCustCats.forEach(n => { if (!CUSTOM_CATS.includes(n)) CUSTOM_CATS.push(n); });
 
-      renderAll();
-      populateAddCat();
-      showSyncStatus('✓ Loaded', '#1D9E75');
-      return;
-    }
+  // Deleted categories
+  const savedDelCats = lsGet('deletedCats', []);
+  savedDelCats.forEach(n => DELETED_CATS.add(n));
 
-    // Browser: load from Supabase
-    const [txns, delIdxs, budgetOvr, catRen, custCats, delCats] = await Promise.all([
-      sbFetch('added_txns?select=*&order=created_at.asc'),
-      sbFetch('deleted_idxs?select=idx'),
-      sbFetch('budget_overrides?select=key,value'),
-      sbFetch('cat_renames?select=original_name,label,from_date'),
-      sbFetch('custom_cats?select=name'),
-      sbFetch('deleted_cats?select=name'),
-    ]);
+  // Deleted transaction indexes
+  const savedDelIdxs = lsGet('deletedTxns', []);
+  savedDelIdxs.forEach(idx => DELETED_IDXS.add(idx));
 
-    const bakedIds = new Set(addedTxns.map(t => t._id));
-    txns.forEach(t => {
-      const txn = { _id: t.id, year: t.year, month: t.month, day: t.day, category: t.category, merchant: t.merchant, amount: parseFloat(t.amount) };
-      if (t.promoted_from !== null && t.promoted_from !== undefined) txn._promotedFrom = t.promoted_from;
-      if (!bakedIds.has(t.id)) { addedTxns.push(txn); bakedIds.add(t.id); }
-    });
-
-    delIdxs.forEach(r => DELETED_IDXS.add(r.idx));
-    budgetOvr.forEach(r => { BUDGET_OVERRIDES[r.key] = parseFloat(r.value); });
-    catRen.forEach(r => { CAT_RENAMES[r.original_name] = { label: r.label, from: r.from_date }; });
-    custCats.forEach(r => { if (!CUSTOM_CATS.includes(r.name)) CUSTOM_CATS.push(r.name); });
-    delCats.forEach(r => DELETED_CATS.add(r.name));
-
-    renderAll();
-    populateAddCat();
-    showSyncStatus('✓ Synced with cloud', '#1D9E75');
-  } catch(e) {
-    console.error('Load error:', e);
-    showSyncStatus('⚠ Offline — changes save locally only', '#d97706');
-  }
+  renderAll();
+  populateAddCat();
 }
 
 function showSyncStatus(msg, color) {
@@ -711,60 +656,6 @@ function showSyncStatus(msg, color) {
   el.textContent = msg;
   el.style.color = color;
   setTimeout(() => { if (el) el.textContent = ''; }, 4000);
-}
-
-// ── Remote persist helpers ─────────────────────────────────────────────────────
-// In Claude env these are no-ops (localStorage persist functions handle it via csSet).
-// In browser they sync to Supabase.
-async function sbUpsertTxn(txn) {
-  if (IS_CLAUDE_ENV) return;
-  try {
-    await sbFetch('added_txns?on_conflict=id', 'POST', [{
-      id: txn._id, year: txn.year, month: txn.month, day: txn.day,
-      category: txn.category, merchant: txn.merchant, amount: txn.amount,
-      promoted_from: txn._promotedFrom !== undefined ? txn._promotedFrom : null
-    }]);
-  } catch(e) { console.error('sbUpsertTxn error:', e); }
-}
-
-async function sbDeleteTxn(id) {
-  if (IS_CLAUDE_ENV) return;
-  try { await sbFetch('added_txns?id=eq.' + encodeURIComponent(id), 'DELETE'); } catch(e) { console.error('sbDeleteTxn error:', e); }
-}
-
-async function sbUpsertDeletedIdx(idx) {
-  if (IS_CLAUDE_ENV) return;
-  try { await sbFetch('deleted_idxs?on_conflict=idx', 'POST', [{idx}]); } catch(e) { console.error('sbUpsertDeletedIdx error:', e); }
-}
-
-async function sbUpsertBudgetOverride(key, value) {
-  if (IS_CLAUDE_ENV) return;
-  try { await sbFetch('budget_overrides?on_conflict=key', 'POST', [{key, value}]); } catch(e) { console.error('sbUpsertBudgetOverride error:', e); }
-}
-
-async function sbUpsertCatRename(originalName, label, fromDate) {
-  if (IS_CLAUDE_ENV) return;
-  try { await sbFetch('cat_renames?on_conflict=original_name', 'POST', [{original_name: originalName, label, from_date: fromDate}]); } catch(e) { console.error('sbUpsertCatRename error:', e); }
-}
-
-async function sbDeleteCatRename(originalName) {
-  if (IS_CLAUDE_ENV) return;
-  try { await sbFetch('cat_renames?original_name=eq.' + encodeURIComponent(originalName), 'DELETE'); } catch(e) { console.error('sbDeleteCatRename error:', e); }
-}
-
-async function sbUpsertCustomCat(name) {
-  if (IS_CLAUDE_ENV) return;
-  try { await sbFetch('custom_cats?on_conflict=name', 'POST', [{name}]); } catch(e) { console.error('sbUpsertCustomCat error:', e); }
-}
-
-async function sbDeleteCustomCat(name) {
-  if (IS_CLAUDE_ENV) return;
-  try { await sbFetch('custom_cats?name=eq.' + encodeURIComponent(name), 'DELETE'); } catch(e) { console.error('sbDeleteCustomCat error:', e); }
-}
-
-async function sbUpsertDeletedCat(name) {
-  if (IS_CLAUDE_ENV) return;
-  try { await sbFetch('deleted_cats?on_conflict=name', 'POST', [{name}]); } catch(e) { console.error('sbUpsertDeletedCat error:', e); }
 }
 
 const CAT_COLORS = ['#3266ad','#1D9E75','#E07830','#8B5CF6','#D94F6A','#0891b2','#d97706','#059669','#7c3aed','#dc2626','#2563eb','#16a34a','#f59e0b','#ef4444'];
@@ -793,10 +684,8 @@ let addedTxns = (() => {
   } catch(e) { return []; }
 })();
 
-function persistAddedTxns(newTxns) {
-  if (IS_CLAUDE_ENV) { csSet('addedTxns', addedTxns); return; }
-  try { localStorage.setItem('addedTxns', JSON.stringify(addedTxns)); } catch(e) {}
-  if (newTxns) newTxns.forEach(t => sbUpsertTxn(t));
+function persistAddedTxns() {
+  lsSet('addedTxns', addedTxns);
 }
 
 
@@ -991,9 +880,7 @@ function getBudget(cat, year, month, fallback) {
 function saveBudgetOverride(cat, year, month, value) {
   const key = month === 'ALL' ? `${year}|ALL|${cat}` : `${year}|${month}|${cat}`;
   BUDGET_OVERRIDES[key] = value;
-  if (IS_CLAUDE_ENV) { csSet('budgetOverrides', BUDGET_OVERRIDES); return; }
-  try { localStorage.setItem('budgetOverrides', JSON.stringify(BUDGET_OVERRIDES)); } catch(e) {}
-  sbUpsertBudgetOverride(key, value);
+  lsSet('budgetOverrides', BUDGET_OVERRIDES);
 }
 
 function startBudgetEdit(el, cat, proj, year, month) {
@@ -1092,12 +979,10 @@ function commitCatRename(input, originalCat) {
   const { year, month } = todayYearMonth();
   if (val && val !== originalCat) {
     CAT_RENAMES[originalCat] = { label: val, from: `${year}|${month}` };
-    if (IS_CLAUDE_ENV) { csSet('catRenames', CAT_RENAMES); }
-    else { try { localStorage.setItem('catRenames', JSON.stringify(CAT_RENAMES)); } catch(e) {} sbUpsertCatRename(originalCat, val, `${year}|${month}`); }
+    lsSet('catRenames', CAT_RENAMES);
   } else if (!val) {
     delete CAT_RENAMES[originalCat];
-    if (IS_CLAUDE_ENV) { csSet('catRenames', CAT_RENAMES); }
-    else { try { localStorage.setItem('catRenames', JSON.stringify(CAT_RENAMES)); } catch(e) {} sbDeleteCatRename(originalCat); }
+    lsSet('catRenames', CAT_RENAMES);
   }
   renderOverviewTxns();
   renderMetrics();
@@ -1132,11 +1017,8 @@ const DELETED_CATS = (() => {
   } catch(e) { return new Set(); }
 })();
 
-function persistCustomCats(added, removed) {
-  if (IS_CLAUDE_ENV) { csSet('customCats', CUSTOM_CATS); return; }
-  try { localStorage.setItem('customCats', JSON.stringify(CUSTOM_CATS)); } catch(e) {}
-  if (added) sbUpsertCustomCat(added);
-  if (removed) sbDeleteCustomCat(removed);
+function persistCustomCats() {
+  lsSet('customCats', CUSTOM_CATS);
 }
 
 function getAllCategoryNames() {
@@ -1202,8 +1084,7 @@ function deleteCategory(name) {
 
   // Mark as deleted — filterData will only hide it for current/future months
   DELETED_CATS.add(name);
-  if (IS_CLAUDE_ENV) { csSet('deletedCats', [...DELETED_CATS]); }
-  else { try { localStorage.setItem('deletedCats', JSON.stringify([...DELETED_CATS])); } catch(e) {} sbUpsertDeletedCat(name); }
+  lsSet('deletedCats', [...DELETED_CATS]);
 
   window._addCats = getAllCategoryNames();
   renderCategories();
@@ -1427,15 +1308,12 @@ const DELETED_IDXS = (() => {
 
 function deleteTxn(id) {
   if (typeof id === 'number' || /^\d+$/.test(String(id))) {
-    // Spreadsheet transaction — add to deleted set
     const idx = parseInt(id);
     DELETED_IDXS.add(idx);
-    if (IS_CLAUDE_ENV) { csSet('deletedIdxs', [...DELETED_IDXS]); }
-    else { try { localStorage.setItem('deletedTxns', JSON.stringify([...DELETED_IDXS])); } catch(e) {} sbUpsertDeletedIdx(idx); }
+    lsSet('deletedTxns', [...DELETED_IDXS]);
   } else {
-    // Added transaction — remove from array directly
     const i = addedTxns.findIndex(t => t._id === id);
-    if (i >= 0) { addedTxns.splice(i, 1); if (!IS_CLAUDE_ENV) sbDeleteTxn(id); persistAddedTxns(); }
+    if (i >= 0) { addedTxns.splice(i, 1); persistAddedTxns(); }
   }
   renderTransactions();
   renderOverviewTxns();
@@ -1576,8 +1454,7 @@ function startTxnCatEdit(el, id) {
                 promoted.category = c;
                 addedTxns.push(promoted);
                 DELETED_IDXS.add(idx);
-                if (IS_CLAUDE_ENV) { csSet('deletedIdxs', [...DELETED_IDXS]); }
-                else { try { localStorage.setItem('deletedTxns', JSON.stringify([...DELETED_IDXS])); } catch(e) {} }
+                lsSet('deletedTxns', [...DELETED_IDXS]);
               }
             }
             persistAddedTxns();
@@ -2170,7 +2047,7 @@ function saveAllTxns() {
     msg.textContent='No valid rows to save. Fill in at least a merchant and amount.'; return;
   }
 
-  persistAddedTxns(newTxnsList); // Save all at once after loop
+  persistAddedTxns(); // Save all at once after loop
 
   // Clear rows and add a fresh one
   document.getElementById('txnRows').innerHTML = '';
@@ -2240,71 +2117,8 @@ populateAddCat();
 addTxnRow(); addTxnRow(); addTxnRow();
 renderAll();
 
-// ── First-load migration: push baked data into Supabase once ──────────────────
-async function migrateLocalToSupabase() {
-  const MIGRATION_KEY = 'sb_migrated_v1';
-  if (localStorage.getItem(MIGRATION_KEY)) return; // already done
-
-  showSyncStatus('⟳ Migrating data to cloud…', '#d97706');
-  try {
-    // 1. Upsert all baked addedTxns
-    const txnBatch = addedTxns.map(t => ({
-      id: t._id, year: t.year, month: t.month, day: t.day,
-      category: t.category, merchant: t.merchant, amount: t.amount,
-      promoted_from: t._promotedFrom !== undefined ? t._promotedFrom : null
-    }));
-    // Send in chunks of 50 to stay within Supabase request limits
-    for (let i = 0; i < txnBatch.length; i += 50) {
-      await sbFetch('added_txns?on_conflict=id', 'POST', txnBatch.slice(i, i + 50));
-    }
-
-    // 2. Upsert DELETED_IDXS
-    const delIdxBatch = [...DELETED_IDXS].map(idx => ({ idx }));
-    if (delIdxBatch.length) {
-      for (let i = 0; i < delIdxBatch.length; i += 50) {
-        await sbFetch('deleted_idxs?on_conflict=idx', 'POST', delIdxBatch.slice(i, i + 50));
-      }
-    }
-
-    // 3. Upsert BUDGET_OVERRIDES
-    const budgetBatch = Object.entries(BUDGET_OVERRIDES).map(([key, value]) => ({ key, value }));
-    if (budgetBatch.length) {
-      await sbFetch('budget_overrides?on_conflict=key', 'POST', budgetBatch);
-    }
-
-    // 4. Upsert CAT_RENAMES
-    const renameBatch = Object.entries(CAT_RENAMES).map(([original_name, v]) => ({
-      original_name, label: v.label, from_date: v.from
-    }));
-    if (renameBatch.length) {
-      await sbFetch('cat_renames?on_conflict=original_name', 'POST', renameBatch);
-    }
-
-    // 5. Upsert CUSTOM_CATS
-    const customBatch = CUSTOM_CATS.map(name => ({ name }));
-    if (customBatch.length) {
-      await sbFetch('custom_cats?on_conflict=name', 'POST', customBatch);
-    }
-
-    // 6. Upsert DELETED_CATS
-    const delCatBatch = [...DELETED_CATS].map(name => ({ name }));
-    if (delCatBatch.length) {
-      await sbFetch('deleted_cats?on_conflict=name', 'POST', delCatBatch);
-    }
-
-    localStorage.setItem(MIGRATION_KEY, '1');
-    showSyncStatus('✓ Migration complete', '#1D9E75');
-  } catch(e) {
-    console.error('Migration error:', e);
-    showSyncStatus('⚠ Migration failed — will retry next load', '#d97706');
-  }
-}
-
-// ── Boot: migrate baked data (once), then load from storage ──────────────────
-(async function boot() {
-  if (!IS_CLAUDE_ENV) await migrateLocalToSupabase();
-  await loadFromSupabase();
-})();
+// ── Boot ──────────────────────────────────────────────────────────────────────
+loadFromStorage();
 
 
 </script>
