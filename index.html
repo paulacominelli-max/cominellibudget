@@ -1065,7 +1065,7 @@ function addCustomCategory(name, budget) {
 function reassignUncatTxn(sel, id) {
   const val = sel.value;
   if (!val) return;
-  const t = getTxnSource(id);
+  const t = promoteIfBaked(id);
   if (t) {
     t.category = val;
     persistAddedTxns();
@@ -1309,10 +1309,28 @@ function getTxnSource(id) {
   return addedTxns.find(t => t._id === s) || null;         // manually added
 }
 
+// Promote a baked transaction to addedTxns so edits persist.
+// Returns the mutable object (either existing promoted copy or new one).
+function promoteIfBaked(id) {
+  const s = String(id);
+  if (!/^\d+$/.test(s)) return addedTxns.find(t => t._id === s) || null; // already added
+  const idx = parseInt(s);
+  const orig = TXNS[idx];
+  if (!orig) return null;
+  const existing = addedTxns.find(t => t._promotedFrom === idx);
+  if (existing) return existing;
+  // Promote: clone into addedTxns and mark original as deleted
+  const promoted = {...orig, _id: 'p' + idx + '_' + Date.now(), _promotedFrom: idx};
+  addedTxns.push(promoted);
+  DELETED_IDXS.add(idx);
+  lsSet('deletedTxns', [...DELETED_IDXS]);
+  return promoted;
+}
+
 function commitTxnEdit(input, id) {
   const val = parseFloat(input.value);
   if (!isNaN(val) && val >= 0) {
-    const t = getTxnSource(id);
+    const t = promoteIfBaked(id);
     if (t) { t.amount = val; persistAddedTxns(); }
   }
   renderTransactions();
@@ -1360,7 +1378,7 @@ function startTxnMonthEdit(el, id) {
 function commitTxnMonthEdit(sel, id) {
   const val = sel.value;
   if (val) {
-    const t = getTxnSource(id);
+    const t = promoteIfBaked(id);
     if (t) { t.month = val; persistAddedTxns(); }
   }
   renderTransactions();
@@ -1385,7 +1403,7 @@ function startTxnDayEdit(el, id) {
 
 function commitTxnDayEdit(input, id) {
   const val = parseInt(input.value);
-  const t = getTxnSource(id);
+  const t = promoteIfBaked(id);
   if (t && !isNaN(val) && val >= 1 && val <= 31) {
     t.day = String(val);
     persistAddedTxns();
@@ -1410,7 +1428,7 @@ function startTxnMerchantEdit(el, id) {
 function commitTxnMerchantEdit(input, id) {
   const val = input.value.trim();
   if (val) {
-    const t = getTxnSource(id);
+    const t = promoteIfBaked(id);
     if (t) { t.merchant = val; persistAddedTxns(); }
   }
   renderTransactions();
@@ -1514,7 +1532,7 @@ function startTxnCatEdit(el, id) {
 function commitTxnCatEdit(sel, id) {
   const val = sel.value;
   if (val) {
-    const t = getTxnSource(id);
+    const t = promoteIfBaked(id);
     if (t) { t.category = val; persistAddedTxns(); }
   }
   renderTransactions();
