@@ -1317,19 +1317,41 @@ function getTxnSource(id) {
 // Returns the mutable object (either existing promoted copy or new one).
 function promoteIfBaked(id) {
   const s = String(id);
-  if (!/^\d+$/.test(s)) return addedTxns.find(t => t._id === s) || null; // already added
-  const idx = parseInt(s);
-  const orig = TXNS[idx];
-  if (!orig) { console.log('[promoteIfBaked] no TXNS['+idx+']'); return null; }
-  const existing = addedTxns.find(t => t._promotedFrom === idx);
-  if (existing) { console.log('[promoteIfBaked] reusing existing for idx', idx); return existing; }
-  // Promote: clone into addedTxns and mark original as deleted
-  const promoted = {...orig, _id: 'p' + idx + '_' + Date.now(), _promotedFrom: idx};
-  console.log('[promoteIfBaked] NEW promotion TXNS['+idx+']', orig.merchant, '->', promoted._id);
-  addedTxns.push(promoted);
-  DELETED_IDXS.add(idx);
-  lsSet('deletedTxns', [...DELETED_IDXS]);
-  return promoted;
+
+  // Numeric index = from TXNS array
+  if (/^\d+$/.test(s)) {
+    const idx = parseInt(s);
+    const orig = TXNS[idx];
+    if (!orig) { console.log('[promoteIfBaked] no TXNS['+idx+']'); return null; }
+    const existing = addedTxns.find(t => t._promotedFrom === idx);
+    if (existing) { console.log('[promoteIfBaked] reusing existing for idx', idx); return existing; }
+    const promoted = {...orig, _id: 'u' + idx + '_' + Date.now(), _promotedFrom: idx};
+    console.log('[promoteIfBaked] NEW promotion TXNS['+idx+']', orig.merchant, '->', promoted._id);
+    addedTxns.push(promoted);
+    DELETED_IDXS.add(idx);
+    lsSet('deletedTxns', [...DELETED_IDXS]);
+    return promoted;
+  }
+
+  // Check if it's a baked addedTxns ID (in BAKED_TXN_IDS)
+  if (BAKED_TXN_IDS.has(s)) {
+    // Already promoted under a new ID?
+    const existing = addedTxns.find(t => t._promotedFrom === s);
+    if (existing) { console.log('[promoteIfBaked] reusing promoted copy of baked addedTxn', s); return existing; }
+    // Find the original baked entry and clone it with a new ID
+    const orig = addedTxns.find(t => t._id === s);
+    if (!orig) return null;
+    const promoted = {...orig, _id: 'u' + s + '_' + Date.now(), _promotedFrom: s};
+    console.log('[promoteIfBaked] promoting baked addedTxn', s, '->', promoted._id);
+    // Replace the original in addedTxns with the promoted copy
+    const origIdx = addedTxns.indexOf(orig);
+    if (origIdx >= 0) addedTxns.splice(origIdx, 1);
+    addedTxns.push(promoted);
+    return promoted;
+  }
+
+  // Already a user-added (non-baked) transaction
+  return addedTxns.find(t => t._id === s) || null;
 }
 
 function commitTxnEdit(input, id) {
@@ -1480,31 +1502,17 @@ function startTxnCatEdit(el, id) {
         item.onmouseenter = () => item.style.background = 'var(--bg-secondary)';
         item.onmouseleave = () => item.style.background = c === current ? 'var(--bg-secondary)' : '';
         item.onmousedown = (e) => {
-          e.preventDefault(); // prevent blur firing before click
+          e.preventDefault();
           list.remove();
           el.innerHTML = displayName(c);
           console.log('%c[CAT PICKER CLICKED] id='+id+' new cat='+c, 'background:purple;color:white;font-size:14px');
-          const src = getTxnSource(id);
-          if (src && c) {
-            src.category = c;
-            // If this is a hardcoded TXNS row (numeric id), promote it to addedTxns
-            // so the category change is persisted
-            if (typeof id === 'number' || /^\d+$/.test(String(id))) {
-              const idx = parseInt(id);
-              const existing = addedTxns.find(t => t._promotedFrom === idx);
-              if (existing) {
-                existing.category = c;
-                console.log('[CAT PICKER] updated existing promoted txn');
-              } else {
-                const promoted = {...TXNS[idx], _id: 'p' + idx + '_' + Date.now(), _promotedFrom: idx};
-                promoted.category = c;
-                addedTxns.push(promoted);
-                DELETED_IDXS.add(idx);
-                lsSet('deletedTxns', [...DELETED_IDXS]);
-                console.log('[CAT PICKER] created new promoted txn id='+promoted._id+', addedTxns now:', addedTxns.length, 'BAKED_TXN_IDS has it?', BAKED_TXN_IDS.has(promoted._id));
-              }
+          if (c) {
+            const t = promoteIfBaked(id);
+            if (t) {
+              t.category = c;
+              console.log('[CAT PICKER] saved on', t._id, '| BAKED_TXN_IDS has it?', BAKED_TXN_IDS.has(t._id));
+              persistAddedTxns();
             }
-            persistAddedTxns();
           }
           renderTransactions();
           renderOverviewTxns();
