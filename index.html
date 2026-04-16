@@ -698,8 +698,12 @@ const BAKED_TXN_IDS = new Set(addedTxns.map(t => t._id));
 
 function persistAddedTxns() {
   const userAdded = addedTxns.filter(t => !BAKED_TXN_IDS.has(t._id));
-  console.log('[persistAddedTxns] saving', userAdded.length, 'user-added txns');
+  console.log('[persistAddedTxns] addedTxns total:', addedTxns.length, '| BAKED_TXN_IDS size:', BAKED_TXN_IDS.size, '| saving:', userAdded.length, 'txns');
+  if (userAdded.length > 0) console.log('[persistAddedTxns] sample:', JSON.stringify(userAdded[0]));
   lsSet('userAddedTxns', userAdded);
+  // Verify it was actually stored
+  const verify = localStorage.getItem('userAddedTxns');
+  console.log('[persistAddedTxns] VERIFY stored bytes:', verify ? verify.length : 'NULL');
 }
 
 
@@ -1316,11 +1320,12 @@ function promoteIfBaked(id) {
   if (!/^\d+$/.test(s)) return addedTxns.find(t => t._id === s) || null; // already added
   const idx = parseInt(s);
   const orig = TXNS[idx];
-  if (!orig) return null;
+  if (!orig) { console.log('[promoteIfBaked] no TXNS['+idx+']'); return null; }
   const existing = addedTxns.find(t => t._promotedFrom === idx);
-  if (existing) return existing;
+  if (existing) { console.log('[promoteIfBaked] reusing existing for idx', idx); return existing; }
   // Promote: clone into addedTxns and mark original as deleted
   const promoted = {...orig, _id: 'p' + idx + '_' + Date.now(), _promotedFrom: idx};
+  console.log('[promoteIfBaked] NEW promotion TXNS['+idx+']', orig.merchant, '->', promoted._id);
   addedTxns.push(promoted);
   DELETED_IDXS.add(idx);
   lsSet('deletedTxns', [...DELETED_IDXS]);
