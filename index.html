@@ -1483,6 +1483,7 @@ function startTxnCatEdit(el, id) {
           e.preventDefault(); // prevent blur firing before click
           list.remove();
           el.innerHTML = displayName(c);
+          console.log('%c[CAT PICKER CLICKED] id='+id+' new cat='+c, 'background:purple;color:white;font-size:14px');
           const src = getTxnSource(id);
           if (src && c) {
             src.category = c;
@@ -1493,12 +1494,14 @@ function startTxnCatEdit(el, id) {
               const existing = addedTxns.find(t => t._promotedFrom === idx);
               if (existing) {
                 existing.category = c;
+                console.log('[CAT PICKER] updated existing promoted txn');
               } else {
                 const promoted = {...TXNS[idx], _id: 'p' + idx + '_' + Date.now(), _promotedFrom: idx};
                 promoted.category = c;
                 addedTxns.push(promoted);
                 DELETED_IDXS.add(idx);
                 lsSet('deletedTxns', [...DELETED_IDXS]);
+                console.log('[CAT PICKER] created new promoted txn id='+promoted._id+', addedTxns now:', addedTxns.length, 'BAKED_TXN_IDS has it?', BAKED_TXN_IDS.has(promoted._id));
               }
             }
             persistAddedTxns();
