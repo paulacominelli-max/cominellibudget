@@ -689,7 +689,14 @@ let addedTxns = (() => {
     const bakedIds = new Set(baked.map(t => t._id));
     const userAdded = JSON.parse(localStorage.getItem('userAddedTxns') || '[]');
     console.log('[LOAD] userAddedTxns from localStorage:', userAdded.length, 'items');
-    return [...baked, ...userAdded.filter(t => !bakedIds.has(t._id))];
+    // Build set of baked IDs that have been replaced by a promoted copy
+    const replacedBakedIds = new Set(
+      userAdded.filter(t => t._promotedFrom && bakedIds.has(String(t._promotedFrom)))
+               .map(t => String(t._promotedFrom))
+    );
+    // Keep baked entries that haven't been replaced, plus all user-added (non-baked) entries
+    const filteredBaked = baked.filter(t => !replacedBakedIds.has(t._id));
+    return [...filteredBaked, ...userAdded.filter(t => !bakedIds.has(t._id))];
   } catch(e) { return []; }
 })();
 
@@ -1503,6 +1510,7 @@ function startTxnCatEdit(el, id) {
         item.onmouseleave = () => item.style.background = c === current ? 'var(--bg-secondary)' : '';
         item.onmousedown = (e) => {
           e.preventDefault();
+          selecting = true;
           list.remove();
           el.innerHTML = displayName(c);
           console.log('%c[CAT PICKER CLICKED] id='+id+' new cat='+c, 'background:purple;color:white;font-size:14px');
@@ -1514,6 +1522,7 @@ function startTxnCatEdit(el, id) {
               persistAddedTxns();
             }
           }
+          selecting = false;
           renderTransactions();
           renderOverviewTxns();
           renderMetrics();
@@ -1525,11 +1534,16 @@ function startTxnCatEdit(el, id) {
 
   renderList('');
 
+  let selecting = false;
+
   input.oninput = () => renderList(input.value);
   input.onkeydown = (e) => {
     if (e.key === 'Escape') { list.remove(); el.innerHTML = displayName(current); }
   };
-  input.onblur = () => setTimeout(() => { list.remove(); el.innerHTML = displayName(current); }, 150);
+  input.onblur = () => {
+    if (selecting) return;
+    setTimeout(() => { if (!selecting) { list.remove(); el.innerHTML = displayName(current); } }, 150);
+  };
 
   wrapper.appendChild(input);
   el.innerHTML = '';
