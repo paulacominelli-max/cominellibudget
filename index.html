@@ -617,7 +617,13 @@ function lsGet(key, fallback) {
   try { const v = localStorage.getItem(key); return v !== null ? JSON.parse(v) : fallback; } catch(e) { return fallback; }
 }
 function lsSet(key, val) {
-  try { localStorage.setItem(key, JSON.stringify(val)); } catch(e) {}
+  try {
+    const str = JSON.stringify(val);
+    localStorage.setItem(key, str);
+    console.log('[SAVE OK]', key, str.length + ' bytes');
+  } catch(e) {
+    console.error('[SAVE FAILED]', key, e.message);
+  }
 }
 
 function loadFromStorage() {
@@ -677,8 +683,8 @@ let addedTxns = (() => {
 const BAKED_TXN_IDS = new Set(addedTxns.map(t => t._id));
 
 function persistAddedTxns() {
-  // Only save user-added transactions (not the baked ones) to stay under localStorage limits
   const userAdded = addedTxns.filter(t => !BAKED_TXN_IDS.has(t._id));
+  console.log('[persistAddedTxns] saving', userAdded.length, 'user-added txns');
   lsSet('userAddedTxns', userAdded);
 }
 
@@ -874,6 +880,7 @@ function getBudget(cat, year, month, fallback) {
 function saveBudgetOverride(cat, year, month, value) {
   const key = month === 'ALL' ? `${year}|ALL|${cat}` : `${year}|${month}|${cat}`;
   BUDGET_OVERRIDES[key] = value;
+  console.log('[saveBudgetOverride] key=', key, 'value=', value);
   lsSet('budgetOverrides', BUDGET_OVERRIDES);
 }
 
@@ -895,6 +902,7 @@ function startBudgetEdit(el, cat, proj, year, month) {
 
 function commitBudgetEdit(input, cat, origProj, year, month) {
   const val = parseFloat(input.value);
+  console.log('[commitBudgetEdit] cat=', cat, 'val=', val, 'year=', year, 'month=', month);
   if (!isNaN(val) && val >= 0) {
     // If viewing ALL months, save as a forward-only override (current month onward)
     if (month === 'ALL') {
